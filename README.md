@@ -1,13 +1,32 @@
-# Kimi-K3.1-Pro Docker 下载器
+# hubdl-dl — ModelScope 模型下载 Docker 镜像
 
-基于 [hubdl](https://pypi.org/project/hubdl/) + aria2 的 ModelScope 模型下载镜像。
-内置与 `download-info.py` 等价的实时监控，`docker logs -f` 即可查看进度、速度和 ETA。
+一个开箱即用的 **ModelScope 模型/数据集下载镜像**：hubdl 负责拉取、aria2 负责多连接加速，
+自带实时进度监控。`docker logs -f` 就能看到进度、速度、ETA，可随时 `docker stop` 停止并续传。
 
-- 仓库：<https://github.com/niuxme123/modelscope_for_docker>
-- 基础镜像：`swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/python:3.11-slim-bullseye`
-- 构建架构：仅 `linux/amd64`（x64）
-- 镜像命名：`hubdl-dl:<version>` + `hubdl-dl:latest`，并打 tag 到 `harbor-contest.4pd.io/wangyidong/devops/hubdl-dl:latest`
-- 国内加速：apt 走 `mirrors.aliyun.com`，pip 走 `mirrors.aliyun.com/pypi/simple/`（均可用 `--build-arg` 覆盖）
+```
+# 一条命令下模型，什么都不用算
+docker run -d --name hubdl-dl \
+  -v /mnt/disk0/models/Cookys/SecCEC-Qwen-0.8B:/data \
+  harbor-contest.4pd.io/wangyidong/devops/hubdl-dl:latest \
+  Cookys/SecCEC-Qwen-0.8B /data 400 16 4
+```
+
+特性：
+
+- **总大小自动算**：不传 `TOTAL_SIZE`，启动时按 hubdl 文件清单自动求和（跟随 `--include/--exclude`）
+- **进度以实际落盘为准**：不受多连接下载造成的文件 `st_size` 虚高影响
+- **结束汇总按 hubdl manifest 核对**：`已完整:3.20GB / 清单:3.20GB（7/7 个文件，100.00%）`，有缺会点名
+- **宿主机目录可见**：`HOST_DIR` 或自动探测，日志里不再是难懂的容器内 `/data`
+- **优雅退出可续传**：`docker stop` 转发 SIGTERM 给 hubdl/aria2，`.part` 正常收尾
+
+| 项 | 值 |
+|---|---|
+| 仓库 | <https://github.com/niuxme123/modelscope_for_docker> |
+| 基础镜像 | `swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/python:3.11-slim-bullseye` |
+| 构建架构 | 仅 `linux/amd64`（x64） |
+| 镜像命名 | `hubdl-dl:<version>` + `hubdl-dl:latest`，并推 `harbor-contest.4pd.io/wangyidong/devops/hubdl-dl:<version>` / `:latest` |
+| 国内加速 | apt 走 `mirrors.aliyun.com`，pip 走 `mirrors.aliyun.com/pypi/simple/`（均可用 `--build-arg` 覆盖） |
+| 版本号 | 构建时 `--build-arg VERSION=x.y` 写入镜像，`docker run ... --help` 与启动日志都会显示 |
 
 ---
 
@@ -29,44 +48,47 @@
 
 ```bash
 chmod +x build.sh
-./build.sh 1.0
+./build.sh 1.5            # 只构建并打 tag
+./build.sh 1.5 --push     # 构建 + 推到镜像仓库
 ```
 
 > 首次构建会拉取基础镜像并安装 aria2 / hubdl，耗时几分钟属正常。
+
+第一个参数就是版本号（同时作为 `--build-arg VERSION` 写进镜像，`--help` 会显示）；不传默认 `1.0`。
 
 `build.sh` 做的事：
 
 | 步骤 | 说明 |
 |------|------|
-| `docker build --platform linux/amd64 -t hubdl-dl:<version> .` | 只构建 x64 |
+| `docker build --platform linux/amd64 --build-arg VERSION=<version> -t hubdl-dl:<version> .` | 只构建 x64，版本号写入镜像 |
 | `docker tag ... hubdl-dl:latest` | 本地 latest |
+| `docker tag ... harbor-contest.4pd.io/wangyidong/devops/hubdl-dl:<version>` | 仓库版本 tag |
 | `docker tag ... harbor-contest.4pd.io/wangyidong/devops/hubdl-dl:latest` | 仓库 latest tag |
 
-推送（可选）：
+确认版本：
 
 ```bash
-./build.sh 1.0 --push
+docker run --rm hubdl-dl:latest --help | head -1     # hubdl-dl 1.5  —  ModelScope 模型下载器...
+docker image inspect --format '{{index .Config.Labels "version"}}' hubdl-dl:latest
 ```
-
-版本号从命令行第一个参数读入，不传则默认 `1.0`；每次发版改版本号即可，`latest` 始终指向最后一次构建。
 
 ### 2.1 手动构建 / 换源
 
 ```bash
 # 等价于 build.sh 的核心命令
-docker build --platform linux/amd64 -t hubdl-dl:1.0 .
+docker build --platform linux/amd64 --build-arg VERSION=1.5 -t hubdl-dl:1.5 .
 
 # 换用其他国内源（清华 pip + 清华 debian）
 docker build --platform linux/amd64 \
   --build-arg APT_MIRROR=mirrors.tuna.tsinghua.edu.cn \
   --build-arg PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple \
-  -t hubdl-dl:1.0 .
+  --build-arg VERSION=1.5 -t hubdl-dl:1.5 .
 
 # 完全用官方源（海外机器）
 docker build --platform linux/amd64 \
   --build-arg APT_MIRROR= \
   --build-arg PIP_INDEX=https://pypi.org/simple \
-  -t hubdl-dl:1.0 .
+  --build-arg VERSION=1.5 -t hubdl-dl:1.5 .
 ```
 
 > 镜像内也持久化了 `PIP_INDEX_URL` 环境变量，容器里再 `pip install` 也会走国内源。
@@ -82,7 +104,7 @@ docker build --platform linux/amd64 \
 ```bash
 docker build --platform linux/amd64 \
   --build-arg APT_SECURITY_MIRROR=deb.freexian.com/lts/debian \
-  -t hubdl-dl:1.0 .
+  --build-arg VERSION=1.5 -t hubdl-dl:1.5 .
 ```
 
 ---
@@ -142,30 +164,38 @@ docker logs -f hubdl-dl
 输出示例（每 `SAMPLE_INTERVAL` 秒一行，可向上回翻历史）：
 
 ```
-[entrypoint] 模型:        moonshotai/Kimi-K3.1-Pro
-[entrypoint] 保存目录:    /data  (容器内路径)
-[entrypoint] 宿主目录:    /mnt/disk0/models/Kimi-K3.1-Pro  (HOST_DIR)
-[entrypoint] 限速:        400 Mbps
-[entrypoint] 每文件连接:  16
-[entrypoint] 并行文件数:  4
 [entrypoint] 未指定 TOTAL_SIZE，正在按文件清单自动计算...
 [size] 分页: page 1: 28 (cum 28)
 [size] 仓库: lightx2v/MiniMax-H3-Prompt-Rewriter-Qwen3.8-27B-Ref2VA  文件数: 28  总大小: 51.77GB
+[entrypoint] 镜像版本:    1.5
+[entrypoint] 模型:        lightx2v/MiniMax-H3-Prompt-Rewriter-Qwen3.8-27B-Ref2VA
+[entrypoint] 保存目录:    /data  (容器内路径)
+[entrypoint] 宿主目录:    /mnt/disk0/models/lightx2v/MiniMax-H3-...  (自动探测)
+[entrypoint] 限速:        400 Mbps
+[entrypoint] 每文件连接:  16
+[entrypoint] 并行文件数:  4
 [entrypoint] 预计总大小:  51.77GB  (自动计算)
 [entrypoint] 采样间隔:    5s
+[entrypoint] 开始下载...
 ------------------------------------------------------------
-监控目录: /mnt/disk0/models/lightx2v/MiniMax-H3-...-Ref2VA
+监控目录: /mnt/disk0/models/lightx2v/MiniMax-H3-...
 容器内路径: /data
 预计总大小: 51.77GB
 采样窗口: 5s
 输出模式: LOG(每次一行)
-------------------------------------------------------------
-已用:00:00:05 | 名义: 3.61%(1.87GB) | 真实: 3.62%(1.87GB) | 剩余:49.90GB | 窗口: 383.1MB/s | 监控均: 383.1MB/s | ETA:00:02:13
-已用:00:00:10 | 名义: 7.23%(3.74GB) | 真实: 7.24%(3.75GB) | 剩余:48.02GB | 窗口: 381.5MB/s | 监控均: 382.3MB/s | ETA:00:02:09
+--------------------------------------------------------------------------------
+已用:00:00:05 | 进度: 3.61%(1.87GB) | 剩余:49.90GB | 窗口: 383.1MB/s | 监控均: 383.1MB/s | ETA:00:02:13
+已用:00:00:10 | 进度: 7.23%(3.74GB) | 剩余:48.02GB | 窗口: 381.5MB/s | 监控均: 382.3MB/s | ETA:00:02:09
 ...
-[entrypoint] ✅ 下载完成。最终汇总：
-已用:00:00:00 | 名义:100.00%(51.77GB) | 真实:100.00%(51.77GB) | 剩余:0.00B | 窗口:  0.0MB/s | 监控均:  0.0MB/s | ETA:00:00:00
+已用:00:02:12 | 进度:100.00%(51.77GB) | 剩余:0.00B | 窗口:  1.8MB/s | 监控均: 401.2MB/s | ETA:00:00:00
+
+[entrypoint] ✅ 下载完成。最终：
+已完整:51.77GB / 清单:51.77GB（28/28 个文件，100.00%）
 ```
+
+- `进度` 是**实际写入磁盘的字节**占清单的比例，不是文件 `st_size`（多连接下载时 `st_size` 会瞬间接近完整大小，容易看着像"已完成 95%"）
+- 最终汇总是拿 **hubdl 自己写的 manifest** 逐文件核对，文件缺/短会直接点名：
+  `⚠ 以下文件未完整： - xxx.gguf（缺 59.20KB）`
 
 加上 `--timestamps` 可以给每行带墙上时间戳：
 
@@ -198,6 +228,7 @@ docker logs -f --timestamps hubdl-dl
 | `MODELSCOPE_ENDPOINT` | 空 | 自定义 ModelScope 端点 URL（hubdl 原生支持该变量） |
 | `MODELSCOPE_API_TOKEN` | 空 | 私有/受限模型令牌（hubdl 原生支持） |
 | `EXTRA_ARGS` | 空 | 透传给 hubdl 的额外参数（空格分隔） |
+| `IMAGE_VERSION` | 构建时注入 | 镜像版本号，容器启动与 `--help` 都会显示（由 Dockerfile 写入，无需手动传） |
 
 ### 4.3 只用环境变量方式（等价写法）
 
@@ -236,7 +267,7 @@ docker run -d --name hubdl-dl \
 - **会跟随 `EXTRA_ARGS` 里的过滤条件**：`--include` / `--exclude` / `--dataset` / `--revision` 都会传给计算脚本，所以只下子集时百分比也准。
 - **自动计算失败不影响下载**：比如私有仓库没 token、端点不通、API 变更。此时日志会提示
   `⚠ 自动计算失败，改为只显示已下载量与速度`，监控行变成
-  `已用:... | 已下载:1.87GB(名义1.87GB) | 窗口: 383.1MB/s | 监控均: 383.1MB/s`（没有百分比和 ETA）。
+  `已用:... | 已下载:1.87GB | 窗口: 383.1MB/s | 监控均: 383.1MB/s`（没有百分比和 ETA）。
 - **仍可手动覆盖**：第 6 个位置参数或 `-e TOTAL_SIZE=1.56T` 一旦给出，就不再自动计算。
 - 计算只读 API，不会产生下载流量；大仓库（几万文件）也就几秒。
 
@@ -317,10 +348,23 @@ docker run -d --name hubdl-dl \
 
 > `EXTRA_ARGS` 按空格分词，参数值含空格时用单/双引号包住即可（entrypoint 会自动剥掉外层引号）。
 
-### 5.7 查看帮助
+### 5.7 查看帮助与版本
 
 ```bash
 docker run --rm hubdl-dl:latest --help
+```
+
+首行就是镜像版本，方便确认服务器上跑的/拉的是哪一版：
+
+```
+hubdl-dl 1.5  —  ModelScope 模型下载器（hubdl + aria2，带实时进度监控）
+...
+```
+
+也可以直接查镜像标签里的版本：
+
+```bash
+docker image inspect --format '{{index .Config.Labels "version"}}' hubdl-dl:latest
 ```
 
 ### 5.8 前台运行（单行刷新模式）
@@ -370,7 +414,7 @@ docker run -d --name hubdl-dl \
 
 本仓库的镜像已在本地实测：
 
-- `docker run --rm hubdl-dl:latest --help` → 正常打印帮助
+- `docker run --rm hubdl-dl:latest --help` → 首行打印镜像版本号（如 `hubdl-dl 1.5`）+ 帮助
 - 非法 `RATE` → 退出码 2，提示 `错误: RATE 必须是整数`
 - `EXTRA_ARGS="--dry-run"` → hubdl 只列清单，entrypoint 输出汇总并退出 0
 - `EXTRA_ARGS="--include '*.json'"` → 只下小文件，进度行正常输出
@@ -379,6 +423,20 @@ docker run -d --name hubdl-dl \
 - `lightx2v/MiniMax-H3-Prompt-Rewriter-Qwen3.8-27B-Ref2VA` → 自动算出 `51.77GB`（28 个文件）
 - `--include '*.json'` → 总大小随之变小（`9.36MB` / 6 个文件），百分比口径正确
 - 仓库名写错 → 自动计算失败只告警，继续尝试下载，下载失败后打印 hubdl 日志尾部
+- 完整下载 `Cookys/SecCEC-Qwen-0.8B`（3.20GB / 7 个文件 / 4 个 gguf）→
+  `已完整:3.20GB / 清单:3.20GB（7/7 个文件，100.00%）`，进度行从 0 稳定涨到 100%，不再出现 `剩余:59.20KB` 这类错位收尾
+- 缺文件/短文件场景 → 汇总行会逐条列出 `⚠ 以下文件未完整： - xxx（缺 59.20KB）`
+
+### 8.1 关于「最后汇总不太对」（已修复）
+
+老版本用 `st_size` 当"名义进度"、`st_blocks` 当"真实进度"，两个数在整个下载过程中对不上（多连接写入导致 `st_size` 虚高），
+结束时又用 `--once` 快照做汇总，于是出现 `名义 100% / 真实 100%` 但 `剩余 59.20KB` 这种自相矛盾的行。
+
+现在：
+
+- 进度只用落盘字节，一个数字，从头到尾单调递增
+- 结束时用 hubdl manifest **逐文件核对**，输出 `已完整 X / 清单 Y（N/M 个文件，100.00%）`
+- 真有文件缺失就直接点名（最多列 5 个 + 剩余数量），不再只说一个含糊的"剩余"
 
 ---
 
@@ -387,6 +445,8 @@ docker run -d --name hubdl-dl \
 - **hubdl + aria2**：hubdl 调用 aria2，`-x` 控制单文件分段连接数，`-j` 控制同时下载文件数，`--rate-mbps` 限制总速率。
 - **监控与下载解耦**：entrypoint 启动 hubdl 时把它的 stdout/stderr 重定向到容器内 `/var/log/hubdl.log`，避免与进度行交错；同时后台跑 `download-info.py` 输出到 stdout，所以 `docker logs` 里看到的**只有干净的进度行**。下载失败时 entrypoint 会自动把日志末尾 80 行打到 `docker logs`。
 - **总大小自动计算**：`hubdl-size.py` 复用 hubdl 的 ModelScope 列清单逻辑（`ModelScopeHub.fetch_file_rows`）累加文件大小，所以和 hubdl 真正要下的文件集合一致（含 revision/过滤条件）。
-- **统计口径**：进度统计跳过了 hubdl 自己的缓存目录 `.hubdl`，只统计真实模型文件；“名义”是按文件逻辑大小（st_size），“真实”是按磁盘占用（st_blocks × 512，含稀疏/预分配文件）。
+- **统计口径**：进度 = 实际落盘字节（`st_blocks × 512`），跳过 hubdl 缓存目录 `.hubdl`、aria2 控制文件 `*.aria2`。
+  不用 `st_size` 是因为 aria2 `-x16` 多连接按偏移写入，文件"长度"会瞬间接近完整大小，看着像已经快下完。
+- **总大小分母优先级**：hubdl 写出 `.hubdl/manifest` 后用它（与真正要下的文件集合完全一致）> 启动时按 API 清单估算的值 > 未知（只显示已下载量）。
 - **TTY 感知**：`docker run -d` 时 stdout 不是 TTY，脚本自动切到"每 N 秒一行"模式，进度不糊屏；`docker run -it` 前台跑时会切成单行刷新（`\r`）模式。
 - **优雅退出**：`docker stop` 的 SIGTERM 会被 entrypoint 捕获，转发给所有子进程，hubdl/aria2 有时间收尾 `.part` 文件，重启后续传。

@@ -1,7 +1,11 @@
 FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/python:3.11-slim-bullseye
 
+# 镜像版本号（由 build.sh 通过 --build-arg VERSION=x.y 传入；容器启动/--help 都会显示）
+ARG VERSION=dev
+
 LABEL maintainer="niuxme123" \
-      description="ModelScope model downloader (hubdl + aria2) with live progress monitor"
+      description="ModelScope model downloader (hubdl + aria2) with live progress monitor" \
+      version="${VERSION}"
 
 # ---- 国内镜像源（可用 --build-arg 覆盖） ----
 ARG APT_MIRROR=mirrors.aliyun.com
@@ -13,6 +17,7 @@ ARG PIP_INDEX=https://mirrors.aliyun.com/pypi/simple/
 ENV PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_INDEX_URL=${PIP_INDEX} \
+    IMAGE_VERSION=${VERSION} \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
 
@@ -34,7 +39,7 @@ RUN set -eux; \
     fi; \
     cat /etc/apt/sources.list
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get -o Acquire::Retries=5 update && apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
         aria2 \
         ca-certificates \
         curl \

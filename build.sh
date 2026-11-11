@@ -8,8 +8,12 @@ REGISTRY=harbor-contest.4pd.io/wangyidong/devops
 PLATFORM=linux/amd64
 
 echo "==> 构建 ${NAME}:${VERSION}  (platform=${PLATFORM})"
-docker build --platform "${PLATFORM}" -t "${NAME}:${VERSION}" .
+docker build --platform "${PLATFORM}" \
+    --build-arg VERSION="${VERSION}" \
+    -t "${NAME}:${VERSION}" .
 
+docker tag "${NAME}:${VERSION}" "${NAME}:latest"
+docker tag "${NAME}:${VERSION}" "${REGISTRY}/${NAME}:${VERSION}"
 docker tag "${NAME}:${VERSION}" "${REGISTRY}/${NAME}:latest"
 
 echo "==> 构建完成，镜像列表："
@@ -17,7 +21,9 @@ docker images | grep -E "REPOSITORY|${NAME}" || true
 
 # 需要推送到镜像仓库时： ./build.sh ${VERSION} --push
 if [[ "${2:-}" == "--push" ]]; then
-    echo "==> 推送 ${REGISTRY}/${NAME} :latest"
+    echo "==> 推送 ${REGISTRY}/${NAME}:${VERSION}"
+    docker push "${REGISTRY}/${NAME}:${VERSION}"
+    echo "==> 推送 ${REGISTRY}/${NAME}:latest"
     docker push "${REGISTRY}/${NAME}:latest"
-    echo "==> 推送完成"
+    echo "==> 推送完成（服务器上重新 docker pull 或不加 --pull 直接 run 前先 pull）"
 fi

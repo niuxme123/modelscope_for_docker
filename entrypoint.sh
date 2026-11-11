@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+IMAGE_VERSION="${IMAGE_VERSION:-dev}"
+
 print_help() {
-    cat <<'EOF'
+    cat <<EOF
+hubdl-dl ${IMAGE_VERSION}  —  ModelScope 模型下载器（hubdl + aria2，带实时进度监控）
+
 用法:
   docker run ... <IMAGE> [MODEL] [LOCAL_DIR] [RATE] [X] [J] [TOTAL_SIZE]
 
@@ -22,9 +26,9 @@ print_help() {
   EXTRA_ARGS            透传给 hubdl 的额外参数 (空格分隔, 如 "--exclude '*.gguf'")
 
 示例（TOTAL_SIZE 可省略，会自动算）:
-  docker run -d --name hubdl-dl \
-    -v /mnt/disk0/models/Kimi-K3.1-Pro:/data \
-    hubdl-downloader:latest \
+  docker run -d --name hubdl-dl \\
+    -v /mnt/disk0/models/Kimi-K3.1-Pro:/data \\
+    hubdl-dl:${IMAGE_VERSION} \\
     moonshotai/Kimi-K3.1-Pro /data 400 16 4
 EOF
 }
@@ -134,6 +138,7 @@ if [[ -n "${MODELSCOPE_ENDPOINT:-}" ]]; then
     echo "[entrypoint] MODELSCOPE_ENDPOINT=$MODELSCOPE_ENDPOINT"
 fi
 
+echo "[entrypoint] 镜像版本:    ${IMAGE_VERSION}"
 echo "[entrypoint] 模型:        $MODEL"
 echo "[entrypoint] 保存目录:    $LOCAL_DIR  (容器内路径)"
 if [[ -n "$HOST_DIR" ]]; then
@@ -191,8 +196,8 @@ wait "$MONITOR_PID" 2>/dev/null || true
 
 if [[ $RC -eq 0 ]]; then
     echo
-    echo "[entrypoint] ✅ 下载完成。最终汇总："
-    python3 /opt/download-info.py --once "${MONITOR_ARGS[@]}" || true
+    echo "[entrypoint] ✅ 下载完成。最终："
+    python3 /opt/download-info.py --done "${MONITOR_ARGS[@]}" || true
 else
     echo
     echo "[entrypoint] ❌ 下载进程退出，返回码=$RC。最近 80 行日志："
