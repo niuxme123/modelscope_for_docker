@@ -47,6 +47,7 @@ RUN pip install --no-cache-dir -U pip && \
     hubdl --version
 
 COPY download-info.py /opt/download-info.py
+COPY hubdl-size.py    /opt/hubdl-size.py
 COPY entrypoint.sh   /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 

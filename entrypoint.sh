@@ -12,7 +12,7 @@ print_help() {
   RATE        限速 Mbps         (env: RATE,         默认: 400)
   X           每文件连接数      (env: X,            默认: 16)
   J           并行文件数        (env: J,            默认: 4)
-  TOTAL_SIZE  预计总大小(算进度)(env: TOTAL_SIZE,   默认: 1.56T)
+  TOTAL_SIZE  预计总大小(算进度)(env: TOTAL_SIZE,   默认: 自动按文件清单计算)
 
 可选环境变量:
   HOST_DIR              宿主机上的目录（用于展示，不传则自动探测）
@@ -21,11 +21,11 @@ print_help() {
   MODELSCOPE_API_TOKEN  私有/受限模型令牌
   EXTRA_ARGS            透传给 hubdl 的额外参数 (空格分隔, 如 "--exclude '*.gguf'")
 
-示例:
+示例（TOTAL_SIZE 可省略，会自动算）:
   docker run -d --name hubdl-dl \
     -v /mnt/disk0/models/Kimi-K3.1-Pro:/data \
     hubdl-downloader:latest \
-    moonshotai/Kimi-K3.1-Pro /data 400 16 4 1.56T
+    moonshotai/Kimi-K3.1-Pro /data 400 16 4
 EOF
 }
 
@@ -40,7 +40,7 @@ LOCAL_DIR="${2:-${LOCAL_DIR:-/data}}"
 RATE="${3:-${RATE:-400}}"
 X="${4:-${X:-16}}"
 J="${5:-${J:-4}}"
-TOTAL_SIZE="${6:-${TOTAL_SIZE:-1.56T}}"
+TOTAL_SIZE="${6:-${TOTAL_SIZE:-}}"   # 留空 = 自动按 hubdl 文件清单算
 
 SAMPLE_INTERVAL="${SAMPLE_INTERVAL:-10}"
 export SAMPLE_INTERVAL
@@ -110,8 +110,27 @@ if [[ -z "$HOST_DIR" ]]; then
 fi
 [[ -n "$HOST_DIR" ]] && export HOST_DIR
 
+TOTAL_SIZE_SOURCE="手动指定"
+
 if [[ -n "${MODELSCOPE_ENDPOINT:-}" ]]; then
     export MODELSCOPE_ENDPOINT
+fi
+
+# ---- 总大小：没传就按 ModelScope 文件清单自动计算 ----
+if [[ -z "$TOTAL_SIZE" ]]; then
+    echo "[entrypoint] 未指定 TOTAL_SIZE，正在按文件清单自动计算..."
+    if AUTO_SIZE="$(python3 /opt/hubdl-size.py --repo-id "$MODEL" --hub ms \
+                        --local-dir "$LOCAL_DIR" "${EXTRA_ARRAY[@]}")"; then
+        TOTAL_SIZE="$AUTO_SIZE"
+        TOTAL_SIZE_SOURCE="自动计算"
+    else
+        TOTAL_SIZE=""
+        TOTAL_SIZE_SOURCE="未知"
+        echo "[entrypoint] ⚠ 自动计算失败，改为只显示已下载量与速度（不影响下载）"
+    fi
+fi
+
+if [[ -n "${MODELSCOPE_ENDPOINT:-}" ]]; then
     echo "[entrypoint] MODELSCOPE_ENDPOINT=$MODELSCOPE_ENDPOINT"
 fi
 
@@ -125,7 +144,11 @@ fi
 echo "[entrypoint] 限速:        ${RATE} Mbps"
 echo "[entrypoint] 每文件连接:  $X"
 echo "[entrypoint] 并行文件数:  $J"
-echo "[entrypoint] 预计总大小:  $TOTAL_SIZE"
+if [[ -n "$TOTAL_SIZE" ]]; then
+    echo "[entrypoint] 预计总大小:  $TOTAL_SIZE  ($TOTAL_SIZE_SOURCE)"
+else
+    echo "[entrypoint] 预计总大小:  未知（只显示已下载量与速度）"
+fi
 echo "[entrypoint] 采样间隔:    ${SAMPLE_INTERVAL}s"
 [[ -n "$EXTRA_ARGS" ]] && echo "[entrypoint] 额外参数:    $EXTRA_ARGS"
 echo "[entrypoint] 开始下载..."
@@ -142,7 +165,9 @@ hubdl ms "$MODEL" \
 DOWNLOAD_PID=$!
 
 # ---- 启动监控 ----
-python3 /opt/download-info.py "$LOCAL_DIR" "$TOTAL_SIZE" &
+MONITOR_ARGS=("$LOCAL_DIR")
+[[ -n "$TOTAL_SIZE" ]] && MONITOR_ARGS+=("$TOTAL_SIZE")
+python3 /opt/download-info.py "${MONITOR_ARGS[@]}" &
 MONITOR_PID=$!
 
 cleanup() {
@@ -167,7 +192,7 @@ wait "$MONITOR_PID" 2>/dev/null || true
 if [[ $RC -eq 0 ]]; then
     echo
     echo "[entrypoint] ✅ 下载完成。最终汇总："
-    python3 /opt/download-info.py --once "$LOCAL_DIR" "$TOTAL_SIZE" || true
+    python3 /opt/download-info.py --once "${MONITOR_ARGS[@]}" || true
 else
     echo
     echo "[entrypoint] ❌ 下载进程退出，返回码=$RC。最近 80 行日志："

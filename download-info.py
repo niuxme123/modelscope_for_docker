@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """
 用法:
-    python3 download-info.py <监控目录> <总大小>
-    python3 download-info.py --once <监控目录> <总大小>
+    python3 download-info.py <监控目录> [总大小]
+    python3 download-info.py --once <监控目录> [总大小]
+
+总大小省略（或写 0/auto）时，只显示已下载量与速度，不算百分比/ETA。
 
 环境变量:
     SAMPLE_INTERVAL  采样间隔秒数（默认 10）
+    HOST_DIR         宿主机上的对应目录（仅用于展示）
 """
 
 import os
@@ -83,11 +86,20 @@ def terminal_width() -> int:
 
 def render_status(elapsed, logical, actual, total,
                   speed_mbps, monitor_avg, eta_seconds) -> str:
+    head = f"已用:{format_duration(elapsed)}"
+    if total <= 0:
+        # 总大小未知：只报已下载量与速度
+        return (
+            f"{head} "
+            f"| 已下载:{format_bytes(actual)}(名义{format_bytes(logical)}) "
+            f"| 窗口:{speed_mbps:5.1f}MB/s "
+            f"| 监控均:{monitor_avg:5.1f}MB/s"
+        )
     logical_pct = (logical / total) * 100 if total > 0 else 0
     actual_pct = (actual / total) * 100 if total > 0 else 0
     remaining = max(total - actual, 0)
     return (
-        f"已用:{format_duration(elapsed)} "
+        f"{head} "
         f"| 名义:{logical_pct:5.2f}%({format_bytes(logical)}) "
         f"| 真实:{actual_pct:5.2f}%({format_bytes(actual)}) "
         f"| 剩余:{format_bytes(remaining)} "
@@ -104,12 +116,20 @@ def main():
         once = True
         args.remove("--once")
 
-    if len(args) != 2:
+    if len(args) not in (1, 2):
         print(__doc__)
         sys.exit(1)
 
     model_dir = Path(args[0])
-    total_size_bytes = parse_size(args[1])
+    total_size_bytes = 0
+    if len(args) == 2:
+        raw_total = args[1].strip()
+        if raw_total and raw_total.lower() not in ("auto", "0", "unknown", "-"):
+            try:
+                total_size_bytes = parse_size(raw_total)
+            except ValueError as exc:
+                print(f"警告: {exc}，按『未知总大小』处理", file=sys.stderr)
+                total_size_bytes = 0
 
     if not model_dir.exists():
         print(f"错误: 目录不存在 {model_dir}", file=sys.stderr)
@@ -131,7 +151,10 @@ def main():
     print(f"监控目录: {HOST_DIR or model_dir}")
     if HOST_DIR:
         print(f"容器内路径: {model_dir}")
-    print(f"预计总大小: {format_bytes(total_size_bytes)}")
+    if total_size_bytes > 0:
+        print(f"预计总大小: {format_bytes(total_size_bytes)}")
+    else:
+        print("预计总大小: 未知（只显示已下载量与速度）")
     print(f"采样窗口: {SAMPLE_INTERVAL}s")
     print(f"输出模式: {'TTY(单行刷新)' if tty else 'LOG(每次一行)'}")
     print("-" * min(terminal_width(), 120))
