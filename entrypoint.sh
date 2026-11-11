@@ -15,6 +15,7 @@ print_help() {
   TOTAL_SIZE  预计总大小(算进度)(env: TOTAL_SIZE,   默认: 1.56T)
 
 可选环境变量:
+  HOST_DIR              宿主机上的目录（用于展示，不传则自动探测）
   SAMPLE_INTERVAL       监控采样间隔秒数            (默认: 10)
   MODELSCOPE_ENDPOINT   ModelScope 端点地址
   MODELSCOPE_API_TOKEN  私有/受限模型令牌
@@ -69,13 +70,58 @@ LOG_FILE=/var/log/hubdl.log
 mkdir -p "$(dirname "$LOG_FILE")"
 : > "$LOG_FILE"
 
+# ---- 宿主目录：HOST_DIR 优先，否则尝试从 /proc/self/mountinfo 探测 bind mount 源路径 ----
+detect_host_dir() {
+    python3 - "$1" <<'PY'
+import os, sys
+
+target = os.path.realpath(sys.argv[1])
+try:
+    with open('/proc/self/mountinfo', 'r') as f:
+        lines = f.readlines()
+except OSError:
+    print('')
+    raise SystemExit(0)
+
+best = ''
+for line in lines:
+    parts = line.split(' ')
+    if len(parts) < 6:
+        continue
+    root = parts[3].replace('\\040', ' ')
+    mountpoint = parts[4].replace('\\040', ' ')
+    if mountpoint != target:
+        continue
+    # root 为 '/' 说明此处挂的本就是某个文件系统根，无法反推宿主路径
+    if root in ('', '/'):
+        continue
+    best = root
+    break
+
+print(best)
+PY
+}
+
+HOST_DIR="${HOST_DIR:-}"
+HOST_DIR_SOURCE="HOST_DIR"
+if [[ -z "$HOST_DIR" ]]; then
+    HOST_DIR="$(detect_host_dir "$LOCAL_DIR" || true)"
+    HOST_DIR_SOURCE="自动探测"
+fi
+[[ -n "$HOST_DIR" ]] && export HOST_DIR
+
 if [[ -n "${MODELSCOPE_ENDPOINT:-}" ]]; then
     export MODELSCOPE_ENDPOINT
     echo "[entrypoint] MODELSCOPE_ENDPOINT=$MODELSCOPE_ENDPOINT"
 fi
 
 echo "[entrypoint] 模型:        $MODEL"
-echo "[entrypoint] 保存目录:    $LOCAL_DIR"
+echo "[entrypoint] 保存目录:    $LOCAL_DIR  (容器内路径)"
+if [[ -n "$HOST_DIR" ]]; then
+    echo "[entrypoint] 宿主目录:    $HOST_DIR  ($HOST_DIR_SOURCE)"
+else
+    echo "[entrypoint] 宿主目录:    未知，可用 -e HOST_DIR=/宿主机/目录 指定"
+fi
 echo "[entrypoint] 限速:        ${RATE} Mbps"
 echo "[entrypoint] 每文件连接:  $X"
 echo "[entrypoint] 并行文件数:  $J"

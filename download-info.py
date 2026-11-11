@@ -23,6 +23,8 @@ UNIT_MAP = {
 }
 
 SAMPLE_INTERVAL = int(os.environ.get("SAMPLE_INTERVAL", "10"))
+# 宿主机对应目录（仅用于展示，由 entrypoint 传入）
+HOST_DIR = os.environ.get("HOST_DIR", "").strip()
 
 
 def parse_size(size_str: str) -> int:
@@ -126,7 +128,9 @@ def main():
     baseline_time = start_time
     last_time = start_time
 
-    print(f"监控目录: {model_dir}")
+    print(f"监控目录: {HOST_DIR or model_dir}")
+    if HOST_DIR:
+        print(f"容器内路径: {model_dir}")
     print(f"预计总大小: {format_bytes(total_size_bytes)}")
     print(f"采样窗口: {SAMPLE_INTERVAL}s")
     print(f"输出模式: {'TTY(单行刷新)' if tty else 'LOG(每次一行)'}")

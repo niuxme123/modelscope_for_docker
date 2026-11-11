@@ -112,6 +112,19 @@ docker run -d --name hubdl-dl \
 > 位置参数**均可省略**：省略的会回落到同名环境变量，再回落到默认值。
 > 只传部分时按顺序从第 1 个开始对应。
 
+可以额外告诉容器**宿主机上的真实路径**，这样 `docker logs` 里显示的是你看得懂的目录而不是容器的 `/data`：
+
+```bash
+docker run -d --name hubdl-dl \
+  -v /mnt/disk0/models/Kimi-K3.1-Pro:/data \
+  -e HOST_DIR=/mnt/disk0/models/Kimi-K3.1-Pro \
+  hubdl-downloader:latest \
+  moonshotai/Kimi-K3.1-Pro /data 400 16 4 1.56T
+```
+
+> 不传 `HOST_DIR` 时，entrypoint 会从 `/proc/self/mountinfo` 自动探测 bind mount 的源路径；
+> 如果 `-v` 的源目录本身又是个独立挂载点（如 `/mnt/disk0`），探测结果可能只是相对路径，这时建议显式传 `HOST_DIR`。
+
 ### 3.2 查看进度
 
 ```bash
@@ -122,14 +135,16 @@ docker logs -f hubdl-dl
 
 ```
 [entrypoint] 模型:        moonshotai/Kimi-K3.1-Pro
-[entrypoint] 保存目录:    /data
+[entrypoint] 保存目录:    /data  (容器内路径)
+[entrypoint] 宿主目录:    /mnt/disk0/models/Kimi-K3.1-Pro  (HOST_DIR)
 [entrypoint] 限速:        400 Mbps
 [entrypoint] 每文件连接:  16
 [entrypoint] 并行文件数:  4
 [entrypoint] 预计总大小:  1.56T
 [entrypoint] 采样间隔:    10s
 ------------------------------------------------------------
-监控目录: /data
+监控目录: /mnt/disk0/models/Kimi-K3.1-Pro
+容器内路径: /data
 预计总大小: 1.56TB
 采样窗口: 10s
 输出模式: LOG(每次一行)
@@ -166,6 +181,7 @@ docker logs -f --timestamps hubdl-dl
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
+| `HOST_DIR` | 自动探测 | 宿主机对应的下载目录，仅用于日志展示 |
 | `SAMPLE_INTERVAL` | `10` | 监控采样间隔（秒） |
 | `MODELSCOPE_ENDPOINT` | 空 | 自定义 ModelScope 端点 URL（hubdl 原生支持该变量） |
 | `MODELSCOPE_API_TOKEN` | 空 | 私有/受限模型令牌（hubdl 原生支持） |
@@ -209,7 +225,31 @@ docker rm hubdl-dl
 
 挂载目录里的文件保留，重新 `docker run` 即续传。
 
-### 5.3 修改 ModelScope 端点
+### 5.3 让日志显示宿主机目录（而不是 /data）
+
+`docker logs` 只能看到容器内路径。想让监控头行显示宿主机真实目录，传 `HOST_DIR` 即可：
+
+```bash
+docker run -d --name hubdl-dl \
+  -v /mnt/disk0/models/lightx2v/MiniMax-H3-Prompt-Rewriter-Qwen3.8-27B-Ref2VA:/data \
+  -e HOST_DIR=/mnt/disk0/models/lightx2v/MiniMax-H3-Prompt-Rewriter-Qwen3.8-27B-Ref2VA \
+  hubdl-downloader:latest \
+  lightx2v/MiniMax-H3-Prompt-Rewriter-Qwen3.8-27B-Ref2VA /data 400 16 4 55.6G
+```
+
+输出会变成：
+
+```
+[entrypoint] 保存目录:    /data  (容器内路径)
+[entrypoint] 宿主目录:    /mnt/disk0/models/lightx2v/MiniMax-H3-...  (HOST_DIR)
+...
+监控目录: /mnt/disk0/models/lightx2v/MiniMax-H3-...
+容器内路径: /data
+```
+
+不传 `HOST_DIR` 时会自动探测（显示为 `(自动探测)`），探测结果为空则提示 `未知，可用 -e HOST_DIR=... 指定`。
+
+### 5.4 修改 ModelScope 端点
 
 ```bash
 docker run -d --name hubdl-dl \
@@ -219,7 +259,7 @@ docker run -d --name hubdl-dl \
   moonshotai/Kimi-K3.1-Pro /data 400 16 4 1.56T
 ```
 
-### 5.4 调整采样间隔（更快刷新进度）
+### 5.5 调整采样间隔（更快刷新进度）
 
 ```bash
 docker run -d --name hubdl-dl \
@@ -229,7 +269,7 @@ docker run -d --name hubdl-dl \
   moonshotai/Kimi-K3.1-Pro /data 400 16 4 1.56T
 ```
 
-### 5.5 透传额外参数给 hubdl
+### 5.6 透传额外参数给 hubdl
 
 ```bash
 docker run -d --name hubdl-dl \
@@ -241,13 +281,13 @@ docker run -d --name hubdl-dl \
 
 > `EXTRA_ARGS` 按空格分词，参数值含空格时用单/双引号包住即可（entrypoint 会自动剥掉外层引号）。
 
-### 5.6 查看帮助
+### 5.7 查看帮助
 
 ```bash
 docker run --rm hubdl-downloader:latest --help
 ```
 
-### 5.7 前台运行（单行刷新模式）
+### 5.8 前台运行（单行刷新模式）
 
 ```bash
 docker run -it --rm -v /mnt/disk0/models/Kimi-K3.1-Pro:/data \
