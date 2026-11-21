@@ -129,7 +129,7 @@ echo "==> Hub:        ${HUB}"
 echo "==> Repo:       ${REPO}"
 [[ -n "$SUBPATH" ]]   && echo "==> 子目录过滤: ${SUBPATH}/*"
 [[ -n "$FILE_PATH" ]] && echo "==> 单文件过滤: ${FILE_PATH}"
-((${#EXTRA[@]:-0}))  && echo "==> 额外参数:   ${EXTRA[*]}"
+((${#EXTRA[@]}))      && echo "==> 额外参数:   ${EXTRA[*]}"
 echo "==> 下载目录:   ${LOCAL_DIR}"
 echo "==> 镜像:       ${IMAGE}"
 
