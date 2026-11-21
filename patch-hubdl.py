@@ -22,6 +22,18 @@ import sys
 from pathlib import Path
 
 
+def apply_patch(src: str, marker: str, desc: str, anchor: str, extra: str) -> str:
+    """在 anchor 之后插入额外行；已打过则原样返回。锚点缺失时报错（build 应当失败）。"""
+    if marker in src:
+        print(f"[patch] {desc}: 已存在，跳过")
+        return src
+    if anchor not in src:
+        print(f"[patch] {desc}: 未找到锚点，hubdl 版本可能已变更，请人工核对")
+        raise SystemExit(1)
+    print(f"[patch] {desc}: 已打补丁")
+    return src.replace(anchor, anchor + extra, 1)
+
+
 def main() -> int:
     target = Path(
         "/usr/local/lib/python3.11/site-packages/hubdl/core/download.py"
@@ -38,33 +50,48 @@ def main() -> int:
 
     src = target.read_text(encoding="utf-8")
 
-    if "PATCH(hubdl-dl)" in src:
-        print(f"[patch] {target} 已打过补丁，跳过")
-        return 0
-
-    anchor = (
-        "        # size-aligned (including empty file expected==0)\n"
-        '        if st["size"] != size:\n'
-        "            continue\n"
-    )
-    if anchor not in src:
-        print("[patch] 未找到 scrub_orphan_aria2 锚点，hubdl 版本可能已变更，请人工核对")
-        return 1
-
-    patch = anchor + (
-        "\n"
-        "        # PATCH(hubdl-dl): aria2 多连接偏移写会让 st_size 瞬间达到全量，\n"
-        "        # 真实落盘块数不足时删掉 .aria2 会丢续传位图 → 断点后全量重下。\n"
-        "        # 落盘块数 < size 的视为仍在下载，保留控制文件交给 aria2 --continue。\n"
-        "        try:\n"
-        "            if size > 0 and dest.stat().st_blocks * 512 < size:\n"
-        "                continue\n"
-        "        except OSError:\n"
-        "            continue\n"
+    # 补丁 1: scrub_orphan_aria2 删 .aria2 控制文件前校验真实落盘块数
+    src = apply_patch(
+        src,
+        marker="PATCH(hubdl-dl): aria2 多连接偏移写",
+        desc="scrub_orphan_aria2 续传修复",
+        anchor=(
+            "        # size-aligned (including empty file expected==0)\n"
+            '        if st["size"] != size:\n'
+            "            continue\n"
+        ),
+        extra=(
+            "\n"
+            "        # PATCH(hubdl-dl): aria2 多连接偏移写会让 st_size 瞬间达到全量，\n"
+            "        # 真实落盘块数不足时删掉 .aria2 会丢续传位图 → 断点后全量重下。\n"
+            "        # 落盘块数 < size 的视为仍在下载，保留控制文件交给 aria2 --continue。\n"
+            "        try:\n"
+            "            if size > 0 and dest.stat().st_blocks * 512 < size:\n"
+            "                continue\n"
+            "        except OSError:\n"
+            "            continue\n"
+        ),
     )
 
-    target.write_text(src.replace(anchor, patch, 1), encoding="utf-8")
-    print(f"[patch] 已打补丁: {target}")
+    # 补丁 2: aria2 长尾自愈：无数据 30s 或单连接低于 512KB/s 就掐掉重试，
+    # 避免 -xN 收尾时个别分段被镜像站挂起导致的「卡在 99%」。
+    src = apply_patch(
+        src,
+        marker="PATCH(hubdl-dl-aria2-timeout)",
+        desc="aria2 长尾超时参数",
+        anchor=(
+            '        "--max-tries=5",\n'
+            '        "--retry-wait=2",\n'
+        ),
+        extra=(
+            '        "--timeout=30",            # PATCH(hubdl-dl-aria2-timeout): 单连接无数据 30s 断开重试\n'
+            '        "--connect-timeout=15",    # PATCH(hubdl-dl-aria2-timeout): 建联 15s 超时\n'
+            '        "--lowest-speed-limit=512K",  # PATCH(hubdl-dl-aria2-timeout): 单连接持续低于 512KB/s 重试\n'
+        ),
+    )
+
+    target.write_text(src, encoding="utf-8")
+    print(f"[patch] 完成: {target}")
     return 0
 
 
