@@ -40,6 +40,7 @@ docker run -d --name hubdl-dl \
 ├── download-info.py
 ├── hubdl-size.py
 ├── build.sh
+├── models_download.sh   # 服务器端一键下载包装脚本（可选）
 └── README.md
 ```
 
@@ -371,7 +372,33 @@ hubdl-dl 1.5  —  ModelScope 模型下载器（hubdl + aria2，带实时进度�
 docker image inspect --format '{{index .Config.Labels "version"}}' hubdl-dl:latest
 ```
 
-### 5.8 前台运行（单行刷新模式）
+### 5.8 一键下载脚本 models_download.sh（服务器推荐）
+
+`models_download.sh` 是面向服务器的包装脚本：自动建目录、拉镜像、起容器，**镜像地址和下载根目录不写死**，部署后需先编辑脚本顶部两个变量（也可用同名环境变量传入）：
+
+```bash
+IMAGE=""              # 必填：你的 hubdl-dl 镜像，如 registry.example.com/devops/hubdl-dl:latest
+DEFAULT_BASE_DIR=""   # 宿主机模型根目录，如 /mnt/disk0/models（也可运行时传第 2 个参数）
+```
+
+用法：
+
+```bash
+bash models_download.sh <MODEL_ID 或 网页URL> [BASE_DIR] [额外 hubdl 参数...]
+```
+
+| 传法 | 行为 |
+|------|------|
+| `bash models_download.sh owner/repo` | ModelScope 整仓（加 `HUB=hf` 可当 HF repo 用） |
+| `bash models_download.sh https://hf-mirror.com/lightx2v/Minimax-h3-Turbo/tree/main` | HF 整仓，自动走 hf-mirror |
+| `bash models_download.sh https://hf-mirror.com/TenStrip/10Eros-Max/tree/main/Loras` | **URL 指向子目录 → 只下 `Loras/` 下的文件**（自动生成 `--include 'Loras/*'`） |
+| `bash models_download.sh https://hf-mirror.com/a/b/blob/main/config.json` | **URL 指向单文件 → 只下这个文件**（自动生成 `--include 'config.json'`） |
+| `bash models_download.sh owner/repo /mnt/disk1/models --exclude '*.gguf' --dry-run` | BASE_DIR 之后的所有参数**原样透传给 hubdl**，与 `-e EXTRA_ARGS=...` 等价 |
+
+其他可调环境变量：`RATE`（400）/`X`（16）/`J`（4）/`SAMPLE_INTERVAL`（10）/`CONTAINER_NAME`（hubdl-dl）/`SKIP_PULL=1`（跳过 docker pull）。
+下载目录为 `<BASE_DIR>/<owner>/<repo>`；脚本会把 `HOST_DIR` 一并传给容器，`docker logs` 里直接显示宿主机路径。
+
+### 5.9 前台运行（单行刷新模式）
 
 ```bash
 docker run -it --rm -v /mnt/disk0/models/Kimi-K3.1-Pro:/data \
