@@ -1,6 +1,6 @@
-# hubdl-dl — ModelScope 模型下载 Docker 镜像
+# hubdl-dl — ModelScope / HuggingFace 模型下载 Docker 镜像
 
-一个开箱即用的 **ModelScope 模型/数据集下载镜像**：hubdl 负责拉取、aria2 负责多连接加速，
+一个开箱即用的 **ModelScope / HuggingFace 模型/数据集下载镜像**：hubdl 负责拉取、aria2 负责多连接加速，
 自带实时进度监控。`docker logs -f` 就能看到进度、速度、ETA，可随时 `docker stop` 停止并续传。
 
 ```
@@ -13,6 +13,7 @@ docker run -d --name hubdl-dl \
 
 特性：
 
+- **双 Hub 支持**：ModelScope 与 HuggingFace（默认走 hf-mirror.com 镜像），`MODEL` 可直接粘贴网页 URL
 - **总大小自动算**：不传 `TOTAL_SIZE`，启动时按 hubdl 文件清单自动求和（跟随 `--include/--exclude`）
 - **进度以实际落盘为准**：不受多连接下载造成的文件 `st_size` 虚高影响
 - **结束汇总按 hubdl manifest 核对**：`已完整:3.20GB / 清单:3.20GB（7/7 个文件，100.00%）`，有缺会点名
@@ -211,7 +212,7 @@ docker logs -f --timestamps hubdl-dl
 
 | 参数 | 环境变量 | 默认值 | 说明 |
 |------|----------|--------|------|
-| MODEL | `MODEL` | `moonshotai/Kimi-K3.1-Pro` | ModelScope 模型 ID |
+| MODEL | `MODEL` | `moonshotai/Kimi-K3.1-Pro` | 模型 ID，也支持直接粘网页 URL（见第 7 节） |
 | LOCAL_DIR | `LOCAL_DIR` | `/data` | 容器内下载目录 |
 | RATE | `RATE` | `400` | 限速（Mbps），服务器带宽 500Mb 时建议 400 |
 | X | `X` | `16` | 每文件连接数，速度上不去可加大 |
@@ -222,12 +223,15 @@ docker logs -f --timestamps hubdl-dl
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
+| `HUB` | `ms` | 下载源： `ms`（ModelScope）/ `hf`（HuggingFace）；粘贴 hf 网页 URL 时自动切换 |
+| `HF_ENDPOINT` | HUB=hf 时默认 `https://hf-mirror.com` | HuggingFace 端点，可 `-e HF_ENDPOINT=https://huggingface.co` 覆盖 |
+| `HF_TOKEN` | 空 | HuggingFace 私有/受限仓库令牌（hubdl 原生支持） |
 | `HOST_DIR` | 自动探测 | 宿主机对应的下载目录，仅用于日志展示 |
 | `TOTAL_SIZE` | 自动计算 | 手动指定总大小（如 `1.56T`），可覆盖自动计算 |
 | `SAMPLE_INTERVAL` | `10` | 监控采样间隔（秒） |
 | `MODELSCOPE_ENDPOINT` | 空 | 自定义 ModelScope 端点 URL（hubdl 原生支持该变量） |
 | `MODELSCOPE_API_TOKEN` | 空 | 私有/受限模型令牌（hubdl 原生支持） |
-| `EXTRA_ARGS` | 空 | 透传给 hubdl 的额外参数（空格分隔） |
+| `EXTRA_ARGS` | 空 | 透传给 hubdl 的额外参数（空格分隔），如 `"--exclude '*.gguf'"`、只下子目录用 `"--include '子目录/*'"` |
 | `IMAGE_VERSION` | 构建时注入 | 镜像版本号，容器启动与 `--help` 都会显示（由 Dockerfile 写入，无需手动传） |
 
 ### 4.3 只用环境变量方式（等价写法）
@@ -394,7 +398,67 @@ docker run -d --name hubdl-dl \
 
 ---
 
-## 7. 排错
+## 7. 下载 HuggingFace（hf-mirror.com）与只下载部分文件
+
+### 7.1 HuggingFace：整仓下载
+
+`HUB=hf` 打开 HuggingFace 支持；**不传 `HF_ENDPOINT` 时默认走 hf-mirror.com 镜像**（API 列单 + aria2 下载全链路走镜像），可用 `-e HF_ENDPOINT=https://huggingface.co` 覆盖。
+
+```bash
+docker run -d --name hubdl-dl \
+  -v /mnt/disk0/models/Qwen-Image-2.1-Uncensored-Omni-Quantized:/data \
+  -e HUB=hf \
+  hubdl-dl:latest \
+  chatrlabs/Qwen-Image-2.1-Uncensored-Omni-Quantized /data 400 16 4
+```
+
+更省事的方式是**直接把网页 URL 贴给 `MODEL`**（自动识别 Hub；hf-mirror 域名还会自动设好镜像端点）：
+
+```bash
+docker run -d --name hubdl-dl \
+  -v /mnt/disk0/models/Qwen-Image-2.1-Uncensored-Omni-Quantized:/data \
+  hubdl-dl:latest \
+  https://hf-mirror.com/chatrlabs/Qwen-Image-2.1-Uncensored-Omni-Quantized /data 400 16 4
+```
+
+可识别的域名与行为：
+
+| 域名 | 行为 |
+|------|------|
+| `hf-mirror.com` | 自动 `HUB=hf`，自动 `HF_ENDPOINT=https://hf-mirror.com` |
+| `huggingface.co` | 自动 `HUB=hf`，端点仍按默认 hf-mirror（可用 `HF_ENDPOINT` 改） |
+| `modelscope.cn` | 自动 `HUB=ms`，剥掉 `/models` 前缀得到 repo ID |
+
+URL 尾部的 `/tree/<rev>`、`/blob/<rev>/...` 等网页后缀会自动去掉。私有/受限仓库加 `-e HF_TOKEN=hf_xxx`。
+
+### 7.2 只下载仓库里某个文件夹 / 单个文件（ms 与 hf 通用）
+
+不区分 Hub，用 `EXTRA_ARGS` 透传 hubdl 的 `--include` / `--exclude`：
+
+```bash
+# ModelScope：只下 tokenizer / 配置等小 json
+-e EXTRA_ARGS="--include '*.json'"
+
+# hf-mirror：只要 qwen-image-2.1-step90000-INT8-bnb 这一个文件夹
+docker run -d --name hubdl-dl \
+  -v /mnt/disk0/models/Qwen-Image-2.1-INT8-bnb:/data \
+  -e EXTRA_ARGS="--include 'qwen-image-2.1-step90000-INT8-bnb/*'" \
+  hubdl-dl:latest \
+  https://hf-mirror.com/chatrlabs/Qwen-Image-2.1-Uncensored-Omni-Quantized /data 400 16 4
+
+# 只要文件夹里的单个文件
+-e EXTRA_ARGS="--include 'qwen-image-2.1-step90000-INT8-bnb/model.safetensors'"
+```
+
+`--include` 的匹配规则（hubdl 的实现是子串 + 正则）：
+
+- `*` 等价 `.*`，天然跨目录，`--include '子目录/*'` 即可圈住整个子目录（目录结构会保留在下载目录下）
+- 不支持 `**`、`?`、`[...]` 这类完整 glob 语法
+- 不带通配的具体文件名是子串匹配：`--include 'model.safetensors'` 会连 `model.safetensors.index.json` 一起命中，不需要时追加 `--exclude '*.index.json'`
+- 自动计算的 `TOTAL_SIZE` 会跟随过滤条件，进度百分比/ETA 依然准确
+- 建议先 `-e EXTRA_ARGS="--include '...' --dry-run"` 看清单命中是否正确，再实下；命中文件数为 0 会直接报错退出
+
+## 8. 排错
 | 现象 | 排查 |
 |------|------|
 | `docker logs` 没有进度行 | 容器可能已退出：`docker ps -a` 看状态；`docker logs hubdl-dl \| tail` 看末尾错误 |
@@ -410,7 +474,7 @@ docker run -d --name hubdl-dl \
 
 ---
 
-## 8. 已验证的行为
+## 9. 已验证的行为
 
 本仓库的镜像已在本地实测：
 
@@ -427,7 +491,7 @@ docker run -d --name hubdl-dl \
   `已完整:3.20GB / 清单:3.20GB（7/7 个文件，100.00%）`，进度行从 0 稳定涨到 100%，不再出现 `剩余:59.20KB` 这类错位收尾
 - 缺文件/短文件场景 → 汇总行会逐条列出 `⚠ 以下文件未完整： - xxx（缺 59.20KB）`
 
-### 8.1 关于「最后汇总不太对」（已修复）
+### 9.1 关于「最后汇总不太对」（已修复）
 
 老版本用 `st_size` 当"名义进度"、`st_blocks` 当"真实进度"，两个数在整个下载过程中对不上（多连接写入导致 `st_size` 虚高），
 结束时又用 `--once` 快照做汇总，于是出现 `名义 100% / 真实 100%` 但 `剩余 59.20KB` 这种自相矛盾的行。
@@ -440,7 +504,7 @@ docker run -d --name hubdl-dl \
 
 ---
 
-## 9. 原理简述
+## 10. 原理简述
 
 - **hubdl + aria2**：hubdl 调用 aria2，`-x` 控制单文件分段连接数，`-j` 控制同时下载文件数，`--rate-mbps` 限制总速率。
 - **监控与下载解耦**：entrypoint 启动 hubdl 时把它的 stdout/stderr 重定向到容器内 `/var/log/hubdl.log`，避免与进度行交错；同时后台跑 `download-info.py` 输出到 stdout，所以 `docker logs` 里看到的**只有干净的进度行**。下载失败时 entrypoint 会自动把日志末尾 80 行打到 `docker logs`。

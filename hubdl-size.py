@@ -154,6 +154,14 @@ def main() -> int:
     )
     cfg.finalize()
 
+    # hubdl 的 HF Hub 在 fetch_file_rows 里会向 <local_dir>/.hubdl/repo_metadata.json
+    # 写缓存（不自建目录），正常 hubdl 流程有前置 mkdir，这里单独调用要补建，
+    # 否则新目录首次计算会 FileNotFoundError。
+    meta_dir = getattr(cfg, "meta_dir", None)
+    if meta_dir:
+        with contextlib.suppress(OSError):
+            meta_dir.mkdir(parents=True, exist_ok=True)
+
     try:
         hub_obj = get_hub(cfg.hub)
         hub_obj.validate_repo_id(cfg.repo_id)

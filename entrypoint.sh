@@ -5,13 +5,17 @@ IMAGE_VERSION="${IMAGE_VERSION:-dev}"
 
 print_help() {
     cat <<EOF
-hubdl-dl ${IMAGE_VERSION}  —  ModelScope 模型下载器（hubdl + aria2，带实时进度监控）
+hubdl-dl ${IMAGE_VERSION}  —  ModelScope / HuggingFace 模型下载器（hubdl + aria2，带实时进度监控）
 
 用法:
   docker run ... <IMAGE> [MODEL] [LOCAL_DIR] [RATE] [X] [J] [TOTAL_SIZE]
 
 位置参数（按顺序，均可省略，省略则回落到对应环境变量/默认值）:
   MODEL       模型 ID           (env: MODEL,        默认: moonshotai/Kimi-K3.1-Pro)
+              支持直接粘贴网页 URL，如:
+                https://hf-mirror.com/chatrlabs/Qwen-Image-2.1-Uncensored-Omni-Quantized
+                https://huggingface.co/Qwen/Qwen3-0.6B/tree/main
+                https://modelscope.cn/models/Qwen/Qwen3-0.6B
   LOCAL_DIR   容器内下载目录    (env: LOCAL_DIR,    默认: /data)
   RATE        限速 Mbps         (env: RATE,         默认: 400)
   X           每文件连接数      (env: X,            默认: 16)
@@ -19,17 +23,27 @@ hubdl-dl ${IMAGE_VERSION}  —  ModelScope 模型下载器（hubdl + aria2，带
   TOTAL_SIZE  预计总大小(算进度)(env: TOTAL_SIZE,   默认: 自动按文件清单计算)
 
 可选环境变量:
+  HUB                   下载源: ms / hf           (默认: ms；粘贴 hf 网页 URL 时自动切到 hf)
+  HF_ENDPOINT           HuggingFace 端点          (HUB=hf 时默认: https://hf-mirror.com)
+  HF_TOKEN              HuggingFace 访问令牌（私有/受限仓库）
   HOST_DIR              宿主机上的目录（用于展示，不传则自动探测）
   SAMPLE_INTERVAL       监控采样间隔秒数            (默认: 10)
   MODELSCOPE_ENDPOINT   ModelScope 端点地址
   MODELSCOPE_API_TOKEN  私有/受限模型令牌
   EXTRA_ARGS            透传给 hubdl 的额外参数 (空格分隔, 如 "--exclude '*.gguf'")
+                        只下子目录/单文件: "--include '子目录/*'" 或 "--include '路径/文件.bin'"
 
 示例（TOTAL_SIZE 可省略，会自动算）:
   docker run -d --name hubdl-dl \\
     -v /mnt/disk0/models/Kimi-K3.1-Pro:/data \\
     hubdl-dl:${IMAGE_VERSION} \\
     moonshotai/Kimi-K3.1-Pro /data 400 16 4
+
+  # HuggingFace（默认走 hf-mirror.com 镜像，MODEL 也能直接贴网页 URL）
+  docker run -d --name hubdl-dl \
+    -v /mnt/disk0/models/Qwen-Image-2.1:/data \
+    hubdl-dl:${IMAGE_VERSION} \
+    https://hf-mirror.com/chatrlabs/Qwen-Image-2.1-Uncensored-Omni-Quantized /data 400 16 4
 EOF
 }
 
@@ -59,6 +73,55 @@ if [[ -n "$EXTRA_ARGS" ]]; then
         t="${t%\"}"; t="${t#\"}"; t="${t%\'}"; t="${t#\'}"
         EXTRA_ARRAY[$i]="$t"
     done
+fi
+
+# ---- HUB：ms / hf（粘贴 hf 网页 URL 时会自动切换） ----
+HUB_EXPLICIT=0
+if [[ -n "${HUB:-}" ]]; then
+    HUB_EXPLICIT=1
+    HUB="${HUB,,}"
+else
+    HUB="ms"
+fi
+case "$HUB" in
+    ms|modelscope)  HUB="ms" ;;
+    hf|huggingface) HUB="hf" ;;
+    *) echo "错误: HUB 必须是 ms 或 hf，当前: $HUB"; exit 2 ;;
+esac
+
+# ---- MODEL 支持直接粘贴网页 URL，自动推导 HUB / repo_id ----
+if [[ "$MODEL" =~ ^https?://([^/]+)/(.+)$ ]]; then
+    url_host="${BASH_REMATCH[1]}"
+    url_path="${BASH_REMATCH[2]}"
+    case "$url_host" in
+        hf-mirror.com|www.hf-mirror.com|huggingface.co|www.huggingface.co)
+            [[ "$HUB_EXPLICIT" -eq 0 ]] && HUB="hf"
+            if [[ "$url_host" == *hf-mirror.com && -z "${HF_ENDPOINT:-}" ]]; then
+                HF_ENDPOINT="https://hf-mirror.com"
+            fi
+            ;;
+        modelscope.cn|www.modelscope.cn)
+            [[ "$HUB_EXPLICIT" -eq 0 ]] && HUB="ms"
+            # https://modelscope.cn/models/<ns>/<name> -> <ns>/<name>
+            url_path="${url_path#models/}"
+            ;;
+        *)
+            echo "错误: 无法识别的模型 URL 域名: $url_host"
+            echo "      请直接传 repo_id（如 owner/name）"
+            exit 2
+            ;;
+    esac
+    # 去掉 /tree/<rev> /blob/<rev>/... 等网页后缀
+    url_path="${url_path%%/tree/*}"
+    url_path="${url_path%%/blob/*}"
+    url_path="${url_path%/}"
+    MODEL="$url_path"
+fi
+
+# ---- HF 端点：HUB=hf 时默认走 hf-mirror.com，可用 -e HF_ENDPOINT=... 覆盖 ----
+if [[ "$HUB" == "hf" ]]; then
+    HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
+    export HF_ENDPOINT
 fi
 
 # ---- 基本校验 ----
@@ -120,10 +183,10 @@ if [[ -n "${MODELSCOPE_ENDPOINT:-}" ]]; then
     export MODELSCOPE_ENDPOINT
 fi
 
-# ---- 总大小：没传就按 ModelScope 文件清单自动计算 ----
+# ---- 总大小：没传就按 Hub 文件清单自动计算 ----
 if [[ -z "$TOTAL_SIZE" ]]; then
     echo "[entrypoint] 未指定 TOTAL_SIZE，正在按文件清单自动计算..."
-    if AUTO_SIZE="$(python3 /opt/hubdl-size.py --repo-id "$MODEL" --hub ms \
+    if AUTO_SIZE="$(python3 /opt/hubdl-size.py --repo-id "$MODEL" --hub "$HUB" \
                         --local-dir "$LOCAL_DIR" "${EXTRA_ARRAY[@]}")"; then
         TOTAL_SIZE="$AUTO_SIZE"
         TOTAL_SIZE_SOURCE="自动计算"
@@ -139,6 +202,10 @@ if [[ -n "${MODELSCOPE_ENDPOINT:-}" ]]; then
 fi
 
 echo "[entrypoint] 镜像版本:    ${IMAGE_VERSION}"
+echo "[entrypoint] Hub:         $HUB"
+if [[ "$HUB" == "hf" ]]; then
+    echo "[entrypoint] HF 端点:     $HF_ENDPOINT"
+fi
 echo "[entrypoint] 模型:        $MODEL"
 echo "[entrypoint] 保存目录:    $LOCAL_DIR  (容器内路径)"
 if [[ -n "$HOST_DIR" ]]; then
@@ -160,7 +227,7 @@ echo "[entrypoint] 开始下载..."
 echo "------------------------------------------------------------"
 
 # ---- 启动 hubdl（后台；原始输出写文件，避免污染监控行） ----
-hubdl ms "$MODEL" \
+hubdl "$HUB" "$MODEL" \
     --local-dir "$LOCAL_DIR" \
     --rate-mbps "$RATE" \
     -x "$X" \
