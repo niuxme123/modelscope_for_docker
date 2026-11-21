@@ -18,7 +18,7 @@ docker run -d --name hubdl-dl \
 - **进度以实际落盘为准**：不受多连接下载造成的文件 `st_size` 虚高影响
 - **结束汇总按 hubdl manifest 核对**：`已完整:3.20GB / 清单:3.20GB（7/7 个文件，100.00%）`，有缺会点名
 - **宿主机目录可见**：`HOST_DIR` 或自动探测，日志里不再是难懂的容器内 `/data`
-- **优雅退出可续传**：`docker stop` 转发 SIGTERM 给 hubdl/aria2，`.part` 正常收尾
+- **优雅退出可续传**：`docker stop` 转发 SIGTERM 给 hubdl/aria2，重启后从断点续传（已修复 hubdl 0.1.2 误删 `.aria2` 控制文件导致全量重下的缺陷，见下方说明）
 
 | 项 | 值 |
 |---|---|
@@ -39,6 +39,7 @@ docker run -d --name hubdl-dl \
 ├── entrypoint.sh
 ├── download-info.py
 ├── hubdl-size.py
+├── patch-hubdl.py       # 构建期给 hubdl 打的续传缺陷补丁
 ├── build.sh
 ├── models_download.sh   # 服务器端一键下载包装脚本（可选）
 └── README.md
@@ -497,6 +498,7 @@ docker run -d --name hubdl-dl \
 | 想确认容器内文件 | `docker exec -it hubdl-dl ls -lh /data \| head` |
 | 想看 hubdl 原始输出 | `docker exec -it hubdl-dl tail -f /var/log/hubdl.log` |
 | 想重启下载（不续传） | `docker rm -f hubdl-dl` 后删除宿主机目标目录内文件，再 `docker run` |
+| 重启后从头重下（<1.6 镜像） | hubdl 0.1.2 缺陷：多连接下载中文件 `st_size` 虚高，重启时 `.aria2` 续传位图被误删。升级到 1.6+ 镜像即可（已内置 `patch-hubdl.py` 补丁，按真实落盘块数判断） |
 | Apple Silicon 上构建慢 | 已固定 `--platform linux/amd64`，走 QEMU 模拟属正常 |
 
 ---
@@ -540,4 +542,12 @@ docker run -d --name hubdl-dl \
   不用 `st_size` 是因为 aria2 `-x16` 多连接按偏移写入，文件"长度"会瞬间接近完整大小，看着像已经快下完。
 - **总大小分母优先级**：hubdl 写出 `.hubdl/manifest` 后用它（与真正要下的文件集合完全一致）> 启动时按 API 清单估算的值 > 未知（只显示已下载量）。
 - **TTY 感知**：`docker run -d` 时 stdout 不是 TTY，脚本自动切到"每 N 秒一行"模式，进度不糊屏；`docker run -it` 前台跑时会切成单行刷新（`\r`）模式。
-- **优雅退出**：`docker stop` 的 SIGTERM 会被 entrypoint 捕获，转发给所有子进程，hubdl/aria2 有时间收尾 `.part` 文件，重启后续传。
+- **优雅退出**：`docker stop` 的 SIGTERM 会被 entrypoint 捕获，转发给所有子进程，hubdl/aria2 正常收尾，重启后续传。
+
+### 10.1 关于断点续传与 hubdl 补丁（patch-hubdl.py）
+
+aria2 多连接按偏移写文件，`st_size` 在下载一开始就达到全量，真实数据只写一部分，续传位图存在 `<file>.aria2` 控制文件里。hubdl 0.1.2 的 `scrub_orphan_aria2` 只用 `st_size == 期望大小` 判断控制文件是否为孤儿：中断后重启，明明没下完的文件也会被误判「完整」，控制文件被删 → aria2 `--continue` 失去位图 → 校验不过 → 全量重下。
+
+镜像构建时用 `patch-hubdl.py` 打了补丁：删控制文件前额外校验真实落盘块数（`st_blocks*512 < size` 视为仍在下载，保留控制文件）。从 1.6 起断点续传对多连接大文件同样生效。上游修复后该补丁可移除。
+
+> 副效应：下载初期 aria2 预分配/截断文件会让落盘量短暂回落，监控脚本已处理（基线重置），不会再出现负速度。

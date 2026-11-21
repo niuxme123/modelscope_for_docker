@@ -51,6 +51,12 @@ RUN pip install --no-cache-dir -U pip && \
     pip install --no-cache-dir hubdl && \
     hubdl --version
 
+# 修复 hubdl 断点续传缺陷：scrub_orphan_aria2 仅凭 st_size 判完整会误删仍在下载的
+# .aria2 控制文件（多连接偏移写使 st_size 瞬间全量），导致重启后全量重下。
+# 补丁逻辑见 patch-hubdl.py（上游修复后可移除）。
+COPY patch-hubdl.py /tmp/patch-hubdl.py
+RUN python3 /tmp/patch-hubdl.py && rm /tmp/patch-hubdl.py
+
 COPY download-info.py /opt/download-info.py
 COPY hubdl-size.py    /opt/hubdl-size.py
 COPY entrypoint.sh   /usr/local/bin/entrypoint.sh

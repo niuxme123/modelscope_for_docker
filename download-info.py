@@ -297,8 +297,15 @@ def main():
                 break
 
             _, actual, _ = get_dir_stats(model_dir)
-            effective_total = manifest_total() or total_size_bytes
             current_time = time.time()
+            # aria2/hubdl 启动时会先 fallocate 预分配整文件，随后可能 truncate 重下，
+            # 导致落盘量回落。此时重置速度基线，避免出现负速度/负均值。
+            if actual < last_actual:
+                last_actual = actual
+            if actual < baseline_actual:
+                baseline_actual = actual
+                baseline_time = current_time
+            effective_total = manifest_total() or total_size_bytes
             elapsed = current_time - start_time
 
             delta_actual = actual - last_actual
